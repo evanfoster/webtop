@@ -2,16 +2,16 @@
 
 import aiohttp
 import argparse
+from asciimatics.screen import ManagedScreen  # type: ignore
 import asyncio
 from collections import deque
 import datetime
 import json
 import math
-import os
 import signal
 import socket
 import time
-from threading import Event
+from asyncio import Event
 from typing import Dict, Collection, Optional, Deque, List, Any, Callable
 import yaml
 from yarl import URL
@@ -77,6 +77,10 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--resolve", metavar="HOST:ADDRESS", type=str, help="Manually resolve host to address")
+
+    parser.add_argument("-q", "--quiet", help="Only print final results", action="store_true", default=False)
+
+    parser.add_argument("-d", "--duration", metavar="SEC", type=float, help="Test duration", default=None)
 
     return parser.parse_args()
 
@@ -204,19 +208,29 @@ async def main() -> None:
         signal.signal(shutdown_signal, shutdown_signal_handler)
 
     tasks = []
+    if args.duration is not None:
+
+        async def stop_test():
+            await asyncio.sleep(args.duration)
+            shutdown_event.set()
+
+        tasks.append(stop_test())
 
     async def renderer() -> None:
-        while True:
-            if shutdown_event.is_set():
-                return
-
+        if not args.quiet:
+            with ManagedScreen() as screen:
+                while not shutdown_event.is_set():
+                    stats = build_stats(url=url, method=args.method, results=results)
+                    output = render_stats(stats, _format=args.output_format)
+                    for index, line in enumerate(output.splitlines()):
+                        screen.print_at(line, 0, index)
+                    screen.refresh()
+                    await asyncio.sleep(0.1)
+        else:
+            await shutdown_event.wait()
             stats = build_stats(url=url, method=args.method, results=results)
             output = render_stats(stats, _format=args.output_format)
-
-            os.system("clear")
-            print(output, flush=True)
-
-            await asyncio.sleep(0.1)
+        print(output)
 
     tasks.append(renderer())
     timeout = aiohttp.ClientTimeout(connect=args.timeout)
