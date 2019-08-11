@@ -10,7 +10,6 @@ import math
 import os
 import signal
 import time
-from threading import Event
 from typing import Dict, Collection, Optional, Deque
 import yaml
 from yarl import URL
@@ -49,6 +48,8 @@ def parse_args() -> argparse.Namespace:
         help="Output format",
         default="json",
     )
+
+    parser.add_argument("-q", "--quiet", help="Only print final results", action="store_true", default=False)
 
     return parser.parse_args()
 
@@ -150,7 +151,7 @@ async def main() -> None:
     url: URL = args.url
 
     results: Deque[Result] = deque(maxlen=args.request_history)
-    shutdown_event = Event()
+    shutdown_event = asyncio.Event()
 
     def shutdown_signal_handler(_, __):
         shutdown_event.set()
@@ -161,17 +162,23 @@ async def main() -> None:
     tasks = []
 
     async def renderer() -> None:
-        while True:
-            if shutdown_event.is_set():
-                return
+        if not args.quiet:
+            while True:
+                if shutdown_event.is_set():
+                    return
 
+                stats = build_stats(url=url, method=args.method, results=results)
+                output = render_stats(stats, _format=args.output_format)
+
+                os.system("clear")
+                print(output, flush=True)
+
+                await asyncio.sleep(0.1)
+        else:
+            await shutdown_event.wait()
             stats = build_stats(url=url, method=args.method, results=results)
             output = render_stats(stats, _format=args.output_format)
-
-            os.system("clear")
-            print(output, flush=True)
-
-            await asyncio.sleep(0.1)
+        print(output)
 
     tasks.append(renderer())
     timeout = aiohttp.ClientTimeout(connect=args.timeout)
