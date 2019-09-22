@@ -2,10 +2,9 @@
 
 from collections import deque
 from threading import Event
-from typing import Dict, Optional, Deque, List, Any, Set
+from typing import Dict, Optional, Deque, List, Any, Set, Awaitable
 import aiohttp
 import asyncio
-import copy
 import datetime
 import enum
 import math
@@ -96,6 +95,7 @@ class Runner(object):
         self.__results: Deque[Result] = deque(maxlen=number_of_running_requests)
         self.__stop_event = Event()
         self.__timeout = timeout
+        self.__tasks: List[Awaitable] = []
 
     def __session(self) -> aiohttp.ClientSession:
         return aiohttp.ClientSession(
@@ -113,18 +113,17 @@ class Runner(object):
                     result = await request(url=self.url, method=self.method.value, session=session)
                     self.__results.append(result)
 
-            event_loop = asyncio.get_event_loop()
             tasks = []
             for _ in range(self.__number_of_workers):
-                tasks.append(event_loop.create_task(worker()))
+                tasks.append(worker())
             self.__tasks = tasks
+            await asyncio.gather(*self.__tasks)
 
     async def stop(self) -> None:
         self.__stop_event.set()
-        asyncio.gather(*self.__tasks)
 
     def get_results(self) -> Set[Result]:
-        return set(copy.deepcopy(self.__results))
+        return set(self.__results)
 
     def get_statistics(self) -> "Statistics":
         return Statistics(self)
@@ -155,5 +154,7 @@ class Statistics(object):
 
             self.reason_counts[reason] = self.reason_counts.get(reason, 0) + 1
 
-        self.success_rate = number_of_successful_results / number_of_responses * 100.0 if self.sample_size > 0 else 0.0
+        self.success_rate = 0.0
+        if self.sample_size > 0 and number_of_responses > 0:
+            self.success_rate = number_of_successful_results / number_of_responses * 100.0 
         self.mean_latency = math.ceil(sum_latency / number_of_responses) if number_of_responses > 0 else 0.0

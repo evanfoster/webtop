@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 from threading import Event
-from time import sleep
 from webtop import api
 from yarl import URL
 import argparse
@@ -105,13 +104,19 @@ async def main() -> None:
         number_of_workers=args.workers,
         timeout=args.timeout
     )
-    await runner.start()
-    breakpoint()
+
+    # asyncio.ensure_future will schedule the coroutine with the event loop, but won't block progress through your
+    # function. It's basically asynchronous asynchronicity, as opposed to the synchronous asynchronicity you get with
+    # await.
+    running = asyncio.ensure_future(runner.start())
 
     shutdown_event = Event()
 
-    async def shutdown_signal_handler(_, __):
-        await runner.stop()
+    # Signal handlers cannot be coroutines, because signal.signal doesn't know how to call a coroutine. This must be a
+    # synchronous function. You can use asyncio.ensure_future to schedule runner.stop even though you're not in a
+    # coroutine yourself.
+    def shutdown_signal_handler(_, __):
+        asyncio.ensure_future(runner.stop())
         shutdown_event.set()
 
     for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
@@ -119,7 +124,11 @@ async def main() -> None:
 
     while not shutdown_event.is_set():
         _print_stats(runner.get_statistics(), _format=args.output_format)
-        sleep(0.1)
+        # time.sleep blocks the event loop. Anything that could block the event loop **MUST** be either asynchronous, or
+        # wrapped in a thread. If it blocks your function from moving forward and there's not an await in front of it,
+        # then your program will hang forever.
+        await asyncio.sleep(0.1)
+    await running
 
 
 if __name__ == "__main__":
