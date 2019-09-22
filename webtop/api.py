@@ -119,7 +119,7 @@ class Runner(object):
             self.__tasks = tasks
             await asyncio.gather(*self.__tasks)
 
-    async def stop(self) -> None:
+    def stop(self) -> None:
         self.__stop_event.set()
 
     def get_results(self) -> Set[Result]:

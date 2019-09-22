@@ -116,7 +116,7 @@ async def main() -> None:
     # synchronous function. You can use asyncio.ensure_future to schedule runner.stop even though you're not in a
     # coroutine yourself.
     def shutdown_signal_handler(_, __):
-        asyncio.ensure_future(runner.stop())
+        runner.stop()
         shutdown_event.set()
 
     for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
