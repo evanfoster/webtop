@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
-from threading import Event
+from asyncio import Event
+from typing import Optional
 from webtop import api
 from yarl import URL
 import argparse
 import asyncio
+import durationpy
 import json
 import os
 import signal
@@ -34,6 +36,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", metavar="SEC", type=float, help="Request timeout threshold", default=1.0)
 
     parser.add_argument(
+        "--follow-redirects",
+        metavar="BOOL",
+        type=str,
+        help="Whether HTTP 3XX responses will be followed",
+        default="true",
+    )
+
+    parser.add_argument(
+        "--verify-tls", metavar="BOOL", type=str, help="Whether to verify TLS certificates", default="true"
+    )
+
+    parser.add_argument(
         "-o",
         "--output-format",
         metavar="FORMAT",
@@ -45,7 +59,28 @@ def _parse_args() -> argparse.Namespace:
 
     parser.add_argument("--resolve", metavar="HOST:ADDRESS", type=str, help="Manually resolve host to address")
 
+    parser.add_argument("-d", "--duration", metavar="TIME", type=str, help="Test duration, e.g. 3h2m1s", default=None)
+
     return parser.parse_args()
+
+
+def duration_is_valid(duration: Optional[str]) -> bool:
+    if duration is None:
+        return True
+    try:
+        durationpy.from_str(duration)
+        return True
+    # Really?! durationpy raises bare Exception??
+    except Exception:
+        return False
+
+
+def _str_to_bool(s: str, default: bool) -> bool:
+    if s.lower() == "true":
+        return True
+    if s.lower() == "false":
+        return False
+    return default
 
 
 def _are_args_valid(args: argparse.Namespace) -> bool:
@@ -56,13 +91,14 @@ def _are_args_valid(args: argparse.Namespace) -> bool:
             args.timeout > 0,
             args.workers > 0,
             args.resolve is None or ":" in args.resolve,
+            duration_is_valid(args.duration),
         )
     )
 
 
 def _build_stats(statistics: api.Statistics) -> dict:
     return {
-        "URL": statistics.url,
+        "URL": str(statistics.url),
         "Verb": statistics.method,
         "Sample Size": statistics.sample_size,
         "Success Rate": f"{statistics.success_rate:3.9f}%",
@@ -97,24 +133,30 @@ async def main() -> None:
             custom_resolution[host] = address
 
     runner = api.Runner(
-        url=str(args.url),
+        url=args.url,
         name_resolution_overrides=custom_resolution,
         method=args.method,
         number_of_running_requests=args.request_history,
         number_of_workers=args.workers,
-        timeout=args.timeout
+        timeout=args.timeout,
+        follow_redirects=_str_to_bool(args.follow_redirects, default=True),
+        verify_tls=_str_to_bool(args.verify_tls, default=True)
     )
 
-    # asyncio.ensure_future will schedule the coroutine with the event loop, but won't block progress through your
-    # function. It's basically asynchronous asynchronicity, as opposed to the synchronous asynchronicity you get with
-    # await.
-    running = asyncio.ensure_future(runner.start())
+    tasks = [asyncio.create_task(runner.start())]
 
     shutdown_event = Event()
 
-    # Signal handlers cannot be coroutines, because signal.signal doesn't know how to call a coroutine. This must be a
-    # synchronous function. You can use asyncio.ensure_future to schedule runner.stop even though you're not in a
-    # coroutine yourself.
+    if args.duration is not None:
+        duration = durationpy.from_str(args.duration)
+
+        async def stop_test():
+            await asyncio.wait([shutdown_event.wait()], timeout=duration.total_seconds())
+            runner.stop()
+            shutdown_event.set()
+
+        tasks.append(asyncio.create_task(stop_test()))
+
     def shutdown_signal_handler(_, __):
         runner.stop()
         shutdown_event.set()
@@ -124,11 +166,8 @@ async def main() -> None:
 
     while not shutdown_event.is_set():
         _print_stats(runner.get_statistics(), _format=args.output_format)
-        # time.sleep blocks the event loop. Anything that could block the event loop **MUST** be either asynchronous, or
-        # wrapped in a thread. If it blocks your function from moving forward and there's not an await in front of it,
-        # then your program will hang forever.
         await asyncio.sleep(0.1)
-    await running
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":

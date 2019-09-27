@@ -2,7 +2,8 @@
 
 from collections import deque
 from threading import Event
-from typing import Dict, Optional, Deque, List, Any, Set, Awaitable
+from typing import Dict, Optional, Deque, List, Any, Set, Coroutine
+from yarl import URL
 import aiohttp
 import asyncio
 import datetime
@@ -33,10 +34,12 @@ class ErrorResult(Result):
         super().__init__(response=None, error=error)
 
 
-async def request(*, url: str, method: str, session: aiohttp.ClientSession) -> Result:
+async def request(
+    *, url: URL, method: str = "GET", follow_redirects: bool = True, session: aiohttp.ClientSession
+) -> Result:
     try:
         start_time = time.time()
-        async with session.request(method, url) as response:
+        async with session.request(method, url, allow_redirects=follow_redirects) as response:
             await response.read()
             end_time = time.time()
             duration = datetime.timedelta(seconds=end_time - start_time)
@@ -80,12 +83,14 @@ class HTTPMethod(enum.Enum):
 class Runner(object):
     def __init__(
         self,
-        url: str,
+        url: URL,
         name_resolution_overrides: Optional[Dict[str, str]],
         method: str = "GET",
         number_of_running_requests: int = 100_000,
         number_of_workers: int = 1,
         timeout: int = 10,
+        follow_redirects: bool = True,
+        verify_tls: bool = True,
     ):
         self.url = url
         self.method = HTTPMethod[method]
@@ -95,13 +100,18 @@ class Runner(object):
         self.__results: Deque[Result] = deque(maxlen=number_of_running_requests)
         self.__stop_event = Event()
         self.__timeout = timeout
-        self.__tasks: List[Awaitable] = []
+        self.__tasks: List[Coroutine] = []
+        self.follow_redirects = follow_redirects
+        self.verify_tls = verify_tls
 
     def __session(self) -> aiohttp.ClientSession:
         return aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(connect=self.__timeout),
             connector=aiohttp.TCPConnector(
-                force_close=True, limit=0, resolver=Resolver(custom_mappings=self.__name_resolution_overrides)
+                force_close=True,
+                limit=0,
+                resolver=Resolver(custom_mappings=self.__name_resolution_overrides),
+                verify_ssl=self.verify_tls,
             ),
         )
 
@@ -110,7 +120,9 @@ class Runner(object):
 
             async def worker() -> None:
                 while not self.__stop_event.is_set():
-                    result = await request(url=self.url, method=self.method.value, session=session)
+                    result = await request(
+                        url=self.url, method=self.method.value, session=session, follow_redirects=self.follow_redirects
+                    )
                     self.__results.append(result)
 
             tasks = []
@@ -154,7 +166,8 @@ class Statistics(object):
 
             self.reason_counts[reason] = self.reason_counts.get(reason, 0) + 1
 
-        self.success_rate = 0.0
-        if self.sample_size > 0 and number_of_responses > 0:
-            self.success_rate = number_of_successful_results / number_of_responses * 100.0 
+        if self.sample_size > 0:
+            self.success_rate = number_of_successful_results / self.sample_size * 100.0
+        else:
+            self.success_rate = 0.0
         self.mean_latency = math.ceil(sum_latency / number_of_responses) if number_of_responses > 0 else 0.0
