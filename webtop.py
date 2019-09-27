@@ -61,6 +61,8 @@ def _parse_args() -> argparse.Namespace:
 
     parser.add_argument("-d", "--duration", metavar="TIME", type=str, help="Test duration, e.g. 3h2m1s", default=None)
 
+    parser.add_argument('-q', '--quiet', action='store_true', default=False)
+
     return parser.parse_args()
 
 
@@ -165,9 +167,11 @@ async def main() -> None:
         signal.signal(shutdown_signal, shutdown_signal_handler)
 
     while not shutdown_event.is_set():
-        _print_stats(runner.get_statistics(), _format=args.output_format)
+        if not args.quiet:
+            _print_stats(runner.get_statistics(), _format=args.output_format)
         await asyncio.sleep(0.1)
     await asyncio.gather(*tasks)
+    _print_stats(runner.get_statistics(), _format=args.output_format)
 
 
 if __name__ == "__main__":
