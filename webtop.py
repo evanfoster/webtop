@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from asciimatics.screen import ManagedScreen
 from asyncio import Event
 from typing import Optional
 from webtop import api
@@ -115,11 +116,15 @@ def _render_stats(statistics: dict, *, _format: str) -> str:
     return output
 
 
-def _print_stats(statistics: api.Statistics, _format: str) -> None:
+def _print_stats(statistics: api.Statistics, _format: str, screen: Optional[ManagedScreen] = None) -> None:
     stats = _build_stats(statistics)
     output = _render_stats(stats, _format=_format)
-    os.system("clear")
-    print(output, flush=True)
+    if screen is not None:
+        for index, line in enumerate(output.splitlines()):
+            screen.print_at(line, 0, index)
+        screen.refresh()
+    else:
+        print(output, flush=True)
 
 
 async def main() -> None:
@@ -164,10 +169,12 @@ async def main() -> None:
     for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
         signal.signal(shutdown_signal, shutdown_signal_handler)
 
-    while not shutdown_event.is_set():
-        _print_stats(runner.get_statistics(), _format=args.output_format)
-        await asyncio.sleep(0.1)
+    with ManagedScreen() as screen:
+        while not shutdown_event.is_set():
+            _print_stats(runner.get_statistics(), _format=args.output_format, screen=screen)
+            await asyncio.sleep(0.1)
     await asyncio.gather(*tasks)
+    _print_stats(runner.get_statistics(), _format=args.output_format)
 
 
 if __name__ == "__main__":
